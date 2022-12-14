@@ -4,15 +4,19 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import productmanager.Product;
 import productmanager.RequestCode;
+import productmanager.db.ProductRepository;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import static com.sun.tools.attach.VirtualMachine.list;
 
 public class ProductServer {
     // 서버에서 뭐가 필요할까 (소켓,
@@ -20,11 +24,13 @@ public class ProductServer {
     private ExecutorService threadPool = Executors.newFixedThreadPool(100);
 
     // 소켓 관리
-
+    private ProductRepository db;
 
     private List<Product> products;
     // products는 db라고 생각해보자
     private int sequence;
+
+    private Connection conn = null;
 
     public static void main(String[] args) {
         ProductServer productServer = new ProductServer();
@@ -33,10 +39,15 @@ public class ProductServer {
         } catch (IOException e) {
             System.out.println(e.getMessage());
             // ProductServer.stop();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+            // db 연결 해서 exception 연결 해줘야한다
+        } catch (ClassNotFoundException e) {
+            throw new RuntimeException(e);
         }
     }
 
-    public void start() throws IOException {
+    public void start() throws IOException, SQLException, ClassNotFoundException {
         // 소켓 포트 바인딩 해줘야함
         // 새로운 연결을 대기하고 있다 (연결이 되면 새로운 소켓을 생성한다)
         // 클라이언트와 새로운 소켓의 통신이 시작된다
@@ -46,11 +57,33 @@ public class ProductServer {
 
         threadPool = Executors.newFixedThreadPool(100);
         // 락을 걸기 위해서 벡터를 쓴다
-        products = new Vector<Product>();
+      //  products = new Vector<Product>();
+        // products 에 db에 있는 걸 start할때 먼저 채워 넣는다
 
-        products.add(
-                new Product(sequence++ , "삼다수", 1000, 20)
-        );
+
+
+        // DB conn (연결을 해준다)
+        db = new ProductRepository();
+        products = db.getProducts();
+        list();
+
+      //  try {
+        //    Class.forName("com.mysql.cj.jdbc.Driver");
+          //  conn = DriverManager.getConnection(
+            //        "jdbc:mysql://localhost:3306/productmanager",
+              //      "root",
+                //    "1234"
+      //      );
+        //    System.out.println("DB 연결 성공");
+      //  } catch (ClassNotFoundException e) {
+        //    throw new RuntimeException();
+      //  } catch (SQLException e) {
+        //    throw new SQLException();
+       // }
+
+   //     products.add(
+   //             new Product(sequence++ , "삼다수", 1000, 20)
+   //     );
 
 
         while (true) {
@@ -118,6 +151,9 @@ public class ProductServer {
                     }
                 } catch (IOException e) {
                     close();
+                } catch (SQLException e) {
+                    // db 로 보내 줘야해서 추가된 exception
+                    throw new RuntimeException(e);
                 }
             });
         }
@@ -153,16 +189,37 @@ public class ProductServer {
             dos.flush();
         }
         // Create
-        public void create(JSONObject request) throws IOException {
+        public void create(JSONObject request) throws IOException, SQLException {
             JSONObject data = request.getJSONObject("data");
             // 클라이언트에서 요청이 서버로 들어옴
             Product product = new Product();
-            product.setNo(sequence++);
+          //  product.setNo(sequence++);
             product.setName(data.getString("name"));
             product.setPrice(data.getInt("price"));
             product.setStock(data.getInt("stock"));
 
+
             products.add(product);
+            //DB에 넣어주기
+            db.add(product);
+
+            products = db.getProducts();
+//
+//            String sql = "" +
+//                    "INSERT INTO products (no, name, price, stock)" +
+//                    "VALUES (?, ?, ?)";
+//
+//
+//            PreparedStatement pstmt = conn.prepareStatement(sql , Statement.RETURN_GENERATED_KEYS);
+//
+//            // pstmt.setInt(1, product.getNo());
+//            pstmt.setString(1, product.getName());
+//            pstmt.setInt(2, product.getPrice());
+//            pstmt.setInt(3, product.getStock());
+//
+//            int rows = pstmt.executeUpdate();
+//            pstmt.close();
+
 
             //response 보내기
             // 1. JSON 만들기
@@ -182,17 +239,28 @@ public class ProductServer {
             // 데이터를 읽고
             // 여기서는 requst 는 한번 펼쳐 졌다
             JSONObject data = request.getJSONObject("data");
-            int no = data.getInt("no");
+            Product product = new Product();
 
-            Iterator<Product> iterator = products.iterator();
-            while(iterator.hasNext()) {
-                Product product = iterator.next();
-                if (product.getNo() == no) {
-                    product.setName(data.getString("name"));
-                    product.setPrice(data.getInt("price"));
-                    product.setStock(data.getInt("stock"));
-                }
-            }
+            product.setName(data.getString("name"));
+            product.setPrice(data.getInt("price"));
+            product.setStock(data.getInt("stock"));
+            product.setNo(data.getInt("no"));
+
+            db.updateDb(product);
+
+            products = db.getProducts();
+
+//            int no = data.getInt("no");
+
+//            Iterator<Product> iterator = products.iterator();
+//            while(iterator.hasNext()) {
+//                Product product = iterator.next();
+//                if (product.getNo() == no) {
+//                    product.setName(data.getString("name"));
+//                    product.setPrice(data.getInt("price"));
+//                    product.setStock(data.getInt("stock"));
+//                }
+//            }
             // reponse
             JSONObject response = new JSONObject();
             response.put("status", "success");
@@ -206,15 +274,23 @@ public class ProductServer {
             // 데이터를 읽고
             // 여기서는 requst 는 한번 펼쳐 졌다
             JSONObject data = request.getJSONObject("data");
-            int no = data.getInt("no");
-            // 해당 no 가 products에 있는 지 확인 후 삭제
-            Iterator<Product> iterator = products.iterator();
-            while(iterator.hasNext()) {
-                Product product = iterator.next();
-                if (product.getNo() == no) {
-                    iterator.remove();
-                }
-            }
+            Product product = new Product();
+
+//            int no = data.getInt("no");
+//            // 해당 no 가 products에 있는 지 확인 후 삭제
+//            Iterator<Product> iterator = products.iterator();
+//            while(iterator.hasNext()) {
+//                Product product = iterator.next();
+//                if (product.getNo() == no) {
+//                    iterator.remove();
+//                }
+//            }
+            product.setNo(data.getInt("no"));
+
+            db.deleteDb(product);
+
+            products = db.getProducts();
+
             // reponse
             JSONObject response = new JSONObject();
             response.put("status", "success");
